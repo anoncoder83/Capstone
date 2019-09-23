@@ -1,0 +1,229 @@
+---
+title: "NLP project Report"
+author: "Shanta Shastri"
+date: "23 August 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Text Processing in R for SwiftKey Data 
+
+In this document we will explore the SwiftKey data set. Link for dataset is this: https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip
+
+The Data consists of three volumes (or Corpora) of text, Blogs, News and twitter data. The corpora are collected from publicly available sources by a web crawler. The crawler checks for language, so as to mainly get texts consisting of the desired language
+
+We will be downloading, cleaning, and exploring these datasets and building a prediction model.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+# initial setup
+library(tm)
+library(lexicon)
+library(stringr)
+library(quanteda)
+library(ggplot2)
+library(R.utils)
+#setwd("C:\\Data Science\\Course 10 Capstone Project")
+
+```
+
+## STEP 1 - Download data
+
+```{r}
+#https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip
+
+downloadURL <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+dataFile <- "SwiftKeyData.zip"
+if(!file.exists(dataFile))
+  download.file(downloadURL, destfile=dataFile, method="curl")
+unzip(dataFile)
+
+```
+  
+## STEP 2 - Initial exploration
+
+* what does the data look like?
+* How many lines of data each corpus has?
+
+```{r, warning=F,message=F}
+bloglines <- countLines("final\\en_US\\en_US.blogs.txt")
+newslines <- countLines("final\\en_US\\en_US.news.txt")
+twitterlines <- countLines("final\\en_US\\en_US.twitter.txt")
+### Lines in each set - A line is counted as an element, and can contain many sentences.
+
+print(paste("Lines in Blog data:",bloglines))
+print(paste("Lines in news data:",newslines))
+print(paste("Lines in twitter data:",twitterlines))
+```
+
+####As we see the corpora is quite big, for next steps, we will randomly subset the data and read only 15% of original data.
+
+### Read Data Samples  
+
+```{r, warning=F,message=F}
+
+subsetWithBinom <- function(con, p, totalLines) {
+  subset = c("");
+  linecount <- 0
+  
+  while(linecount < totalLines){
+    num<- 100;
+    
+    if(linecount+ 100 > totalLines)
+    {num <- totalLines - linecount;}
+    
+    dataline  <- readLines(con,n=num , encoding = "UTF-8") 
+    if(rbinom(1,1, p)>0){
+      subset <- c(subset , dataline);
+    }
+    linecount <- linecount + num;
+  }
+  return(subset)
+}
+
+con1 <- file("final\\en_US\\en_US.blogs.txt",open="r")
+blogData <- subsetWithBinom(con1, p = 0.15, totalLines = bloglines)
+close(con1)
+
+con2 <- file("final\\en_US\\en_US.news.txt", open="r")
+newsData <- subsetWithBinom(con2, p = 0.15, totalLines = newslines)
+close(con2)
+
+con3 <- file("final\\en_US\\en_US.twitter.txt", open="r")
+twitterData <- subsetWithBinom(con3, p = 0.15, totalLines = twitterlines)
+close(con3)
+
+```
+
+## STEP 3 - Cleaning Data
+
+### Cleaning Data includes following steps:
+* Removing numbers
+* Removing profanity (Used profanity_alvarez set of profane words in lexicon package)
+* Removing stopwords
+* Removing punctuation
+* Removing whitespace and special chars
+
+We can do further cleaning of text using lemmatization (Removing infliction of words). 
+
+```{r}
+# Functions defined here. hiding the results of these.
+cleanData <- function(dat){
+  dat <- tm::removeNumbers(dat)
+  dat <- tm::removePunctuation(dat)
+  dat <- tolower(dat)
+  dat <- tm::stripWhitespace(dat)
+  #todo : more cleaning
+  pos <- lexicon::pos_preposition
+  profanity <- as.data.frame(lexicon::profanity_alvarez)
+  #rem <- c(stopwords("en")," T ")
+  dat <- tm::removeWords(dat,profanity$profanity)
+  dat <- stringr::str_replace_all(dat,"^a-zA-Z\\s"," ")
+  return(dat)
+  
+}
+
+blogData <- cleanData(blogData)
+newsData <- cleanData(newsData)
+twitterData <- cleanData(twitterData)
+```
+
+## STEP 4 - Explore the corpus
+
+#### I will use quanteda package here. I found it very convinient and straightforward once you understand the concepts of document-term matrix and tokens. Other packages to consider are Tokenizers and tm.
+
+```{r}
+# generate tokens and frequencies of words
+blogtoks <- quanteda::tokens(blogData, what = "word")
+m <- dfm(blogtoks)
+blogfreq <- textstat_frequency(m)
+
+newstoks <- quanteda::tokens(newsData, what = "word")
+m <- dfm(newstoks)
+newsfreq <- textstat_frequency(m)
+
+twittertoks <- quanteda::tokens(twitterData, what = "word")
+m <- dfm(twittertoks)
+twitterfreq <- textstat_frequency(m)
+```
+  
+### Lets look at distribution of word frequencies
+
+```{r}
+par(mfrow = c(2,2))
+hist(blogfreq$frequency[1:200],breaks  = 100,xlab = "word frequencies", ylab = "number of words") 
+hist(newsfreq$frequency[1:200],breaks  = 100,xlab = "word frequencies", ylab = "number of words") 
+hist(twitterfreq$frequency[1:100],breaks  = 100,xlab = "word frequencies", ylab = "number of words") 
+pdata <- rpois(1000, lambda = 1.75)
+hist(pdata, breaks = 50, xlab="random Poisson distribution",main = "Sample Poisson Distribution")
+```
+  
+### Generate bigram and 3-gram tokens for newsdata
+   
+```{r}
+par(mfrow=c(1,2))
+toks_bigram <- tokens_ngrams(twittertoks, n= 2)
+m1 <- dfm(toks_bigram)
+freq_2gram <- textstat_frequency(m1)
+toks_3gram <- tokens_ngrams(twittertoks, n= 3)
+m <- dfm(toks_3gram)
+freq_3gram <- textstat_frequency(m)
+
+```
+#### Let us look at top 5 rows of bigram and 3-gram in tabular format.
+
+```{r}
+head(freq_2gram)
+head(freq_3gram)
+
+par(mfrow = c(1,2))
+hist(freq_2gram$frequency[1:200],breaks  = 100)
+hist(freq_3gram$frequency[1:200],breaks  = 100)
+
+```
+  
+#STEP 6: Conclusion for milestone report
+
+#### The data seems to follow Poisson distribution.
+#### Ngram tokens follow Poisson distribution as well. 
+#### Noticed that removing stopwords has some effect like cant wait to see has become cant wait see. Hence retained the stopwords.
+   
+# APPENDIX
+
+### Wordcloud - Top 50 words in bigram and 3-gram token sets
+
+```{r, warning=F,message=F}
+textplot_wordcloud(m1, max_words = 50,random_color = T, min_size = 1,max_size = 8)
+textplot_wordcloud(m, max_words = 50,random_color = T, min_size = 1,max_size = 8)
+
+
+## GGplot for blog frequencies
+ggp <- ggplot(data=blogfreq[1:50] , aes(x=feature, y = frequency , color= "red"))
+ggp +  theme(axis.text.x = element_text(angle = 90, hjust = 1))  +
+  labs(y = "Count", title = "Top 50 frequent words") + 
+  geom_point(stat="identity", show.legend = TRUE,  inherit.aes = TRUE,
+             position="stack", alpha=0.75)
+```
+
+```{r}
+rm(twittertoks)
+rm(blogfreq)
+rm(newsfreq)
+rm(twitterfreq)
+rm(m)
+rm(m1)
+
+rm(toks_3gram)
+rm(toks_bigram)
+rm(blogtoks)
+rm(newstoks)
+rm(freq_2gram)
+rm(freq_3gram)
+
+```
+
+
+
+
